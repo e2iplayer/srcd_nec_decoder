@@ -59,7 +59,7 @@ void get_mcusr(void)
 #if defined(IR_ORIGINAL_POWER_KEY) && defined(IR_ORIGINAL_ADDRES_L) && defined(IR_ORIGINAL_ADDRES_H)
 #define PIN_POWER_ENABLE PORTD &= ~(1 << PD4);
 #define PIN_POWER_DISABLE PORTD |= (1 << PD4);
-#define PIN_POWER_PULSE_DURATION_US 572
+#define PIN_POWER_PULSE_DURATION_US 563
 static uint8_t power_raw_code[4] = {IR_ORIGINAL_ADDRES_L, IR_ORIGINAL_ADDRES_H, IR_ORIGINAL_POWER_KEY, ~IR_ORIGINAL_POWER_KEY};
 #else
 #define IR_POWER_SWITCH
@@ -118,47 +118,62 @@ static void put_key(char type, uint8_t last_key)
 ///////////////////////////////////////////////////////////////////////////////
 // handle_power_key
 ///////////////////////////////////////////////////////////////////////////////
-static int handle_power_key(uint8_t force)
+static void handle_power_key(uint8_t force)
 {
     // handle only in deep standby or if forced
-    if (0 == (PIND & (1 << PD5)) || force)
+
+#ifdef IR_POWER_SWITCH
+    if (0 == (PIND & (1 << PD5)))
     {
         cli();
-#ifdef IR_POWER_SWITCH
         PIN_POWER_ENABLE
         _delay_ms(100);
         PIN_POWER_DISABLE
-#else
-        PIN_POWER_ENABLE
-        _delay_us(9000);
-        PIN_POWER_DISABLE
-        _delay_us(4500);
-
-        for (int i=0; i<4; ++i)
-        {
-            uint8_t byte = power_raw_code[i];
-            for (int j=0; j<8; ++j)
-            {
-                PIN_POWER_ENABLE
-                _delay_us(PIN_POWER_PULSE_DURATION_US);
-                PIN_POWER_DISABLE
-                _delay_us(PIN_POWER_PULSE_DURATION_US);
-                if (byte & 0x01)
-                {
-                   _delay_us(2*PIN_POWER_PULSE_DURATION_US);
-                }
-                byte >>= 1;
-            }
-        }
-
-        PIN_POWER_ENABLE
-        _delay_us(PIN_POWER_PULSE_DURATION_US);
-        PIN_POWER_DISABLE
-#endif
         sei();
-        return 1;
     }
-    return 0;
+#else
+    if (0 == (PIND & (1 << PD5)) || force)
+    {
+        cli();
+        do
+        {
+            PIN_POWER_ENABLE
+            _delay_us(9000);
+            PIN_POWER_DISABLE
+            _delay_us(4500);
+
+            for (int i=0; i<4; ++i)
+            {
+                uint8_t byte = power_raw_code[i];
+                for (int j=0; j<8; ++j)
+                {
+                    PIN_POWER_ENABLE
+                    _delay_us(PIN_POWER_PULSE_DURATION_US);
+                    PIN_POWER_DISABLE
+                    _delay_us(PIN_POWER_PULSE_DURATION_US);
+                    if (byte & 0x01)
+                    {
+                       _delay_us(2*PIN_POWER_PULSE_DURATION_US);
+                    }
+                    byte >>= 1;
+                }
+            }
+
+            PIN_POWER_ENABLE
+            _delay_us(PIN_POWER_PULSE_DURATION_US);
+            PIN_POWER_DISABLE
+
+            _delay_ms(50);
+            /* We need to resend the power key code because during our transmision the main ir receive diode 
+             * can also receive signal directly from remote.
+             * This is simple workaround which does not requre addional hardware and for my usage it is enough. 
+             * With this workaround STB will be waked up when user release the power button.
+             */
+        } while (0 == (PIND & (1 << PD5)));
+        sei();
+    }
+#endif
+
 }
 
 int main( void )
