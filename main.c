@@ -118,25 +118,47 @@ static void put_key(char type, uint8_t last_key)
 ///////////////////////////////////////////////////////////////////////////////
 // handle_power_key
 ///////////////////////////////////////////////////////////////////////////////
-static void handle_power_key(uint8_t force)
+static void handle_power_key(uint8_t deepStandby)
 {
     // handle only in deep standby or if forced
-
-#ifdef IR_POWER_SWITCH
-    if (0 == (PIND & (1 << PD5)))
+    // check if in deep standby
+    if (!deepStandby)
     {
+#ifdef IR_DEEP_STANDBY_DETECTION_BY_PIN
+        if (0 == (PIND & (1 << PD5)))
+        {
+            deepStandby = 1;
+        }
+#else
+        deepStandby = 1;
+
+        // we already send power key to process, wait a little bit
+        // and check if we have confirmation char
+       _delay_ms(50);
+        if (UCSRA & (1<<RXC))
+        {
+            char val = UDR;
+            if (val == 'C')
+            {
+                // we receive confirmation char, so power key was aleady handled
+                deepStandby = 0;
+            }
+        }
+#endif
+    }
+
+    if (deepStandby)
+    {
+#ifdef IR_POWER_SWITCH
         cli();
         PIN_POWER_ENABLE
         _delay_ms(100);
         PIN_POWER_DISABLE
         sei();
-    }
 #else
-    if (0 == (PIND & (1 << PD5)) || force)
-    {
-        cli();
         do
         {
+            cli();
             PIN_POWER_ENABLE
             _delay_us(9000);
             PIN_POWER_DISABLE
@@ -162,18 +184,23 @@ static void handle_power_key(uint8_t force)
             PIN_POWER_ENABLE
             _delay_us(PIN_POWER_PULSE_DURATION_US);
             PIN_POWER_DISABLE
+            sei();
 
-            _delay_ms(50);
+            _delay_ms(200);
             /* We need to resend the power key code because during our transmision the main ir receive diode 
              * can also receive signal directly from remote.
              * This is simple workaround which does not requre addional hardware and for my usage it is enough. 
              * With this workaround STB will be waked up when user release the power button.
              */
-        } while (0 == (PIND & (1 << PD5)));
-        sei();
-    }
+            deepStandby += 1;
+        }
+#ifdef IR_DEEP_STANDBY_DETECTION_BY_PIN
+        while (deepStandby < 10 && 0 == (PIND & (1 << PD5)));
+#else
+        while (deepStandby < 10);
 #endif
-
+#endif
+    }
 }
 
 int main( void )
@@ -185,9 +212,11 @@ int main( void )
     DDRD |= (1 << PD4);     // send power on (PD4)
     PIN_POWER_DISABLE       // switch off
 
+#ifdef IR_DEEP_STANDBY_DETECTION_BY_PIN
     // input pin
     DDRD &= ~(1 << PD5);    // is deep standby (PD5)
     //PORTD |= (1 << PD5);    // enable pull-up resistor
+#endif
 
     // https://www.avrfreaks.net/forum/calibration-internal-oscillator
     // https://github.com/pkarsy/rcCalibrator
@@ -215,13 +244,14 @@ int main( void )
     ir_init();
 
     uart_putstring("START\n");
-#ifndef IR_POWER_SWITCH
-    /*For example, Zgemma H9S need receive at least one key code from remote 
-     * to be able to wake up later using this remote, so we send key at start 
-     * to satisfied this
-     */
-    handle_power_key(1);
-#endif
+
+//#ifndef IR_POWER_SWITCH
+//    /*For example, Zgemma H9S need receive at least one key code from remote 
+//     * to be able to wake up later using this remote, so we send key at start 
+//     * to satisfied this
+//     */
+//    handle_power_key(1);
+//#endif
 
     // Internal oscillator calibration
 #if 0
@@ -280,12 +310,12 @@ int main( void )
                 put_key('L', ir.address_l);
                 put_key('H', ir.address_h);
 #endif
+                last_key_valid = 1;
+                put_key('P', last_key);
                 if (IR_POWER_KEY == last_key)
                 {
                     handle_power_key(0);
                 }
-                last_key_valid = 1;
-                put_key('P', last_key);
             }
         }
         else if (rc_timeout)
