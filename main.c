@@ -38,6 +38,7 @@
 #include <avr/interrupt.h>
 #include <avr/wdt.h>
 #include <util/delay.h>
+#include <avr/eeprom.h>
 
 // disable WDT according to: https://www.nongnu.org/avr-libc/user-manual/group__avr__watchdog.html
 uint8_t mcusr_mirror __attribute__ ((section (".noinit")));
@@ -67,6 +68,8 @@ static uint8_t power_raw_code[4] = {IR_ORIGINAL_ADDRES_L, IR_ORIGINAL_ADDRES_H, 
 #define PIN_POWER_DISABLE PORTD &= ~(1 << PD4);
 #endif
 
+#define CFG_FLAGS_HAS_REPEAT 1
+#define CFG_FLAGS_RECV_ALL 2
 
  // Demo code description:
  // INT0   input for the IR receiver (i.e. TSOP 1736, TSOP 31236)
@@ -93,12 +96,22 @@ static void uart_putchar(const char c)
 ///////////////////////////////////////////////////////////////////////////////
 // ###### Send string via UART ######
 ///////////////////////////////////////////////////////////////////////////////
-static void uart_putstring( const char* s )
+static void uart_putstring(const char* s)
 {
     while (*s)
     {
         uart_putchar(*s);
-        s++;
+        ++s;
+    }
+}
+
+static void uart_putdata(const uint8_t* p, uint8_t len)
+{
+    while (len > 0)
+    {
+        uart_putchar(*p);
+        --len;
+        ++p;
     }
 }
 
@@ -203,11 +216,29 @@ static void handle_power_key(uint8_t deepStandby)
     }
 }
 
+typedef struct {
+    uint8_t address_l;
+    uint8_t address_h;
+    uint8_t power_key;
+    uint8_t flags;
+    uint8_t hash;
+} scfg_t;
+
+
+typedef union {
+    scfg_t s;
+    uint8_t data[0];
+} cfg_t;
+
 int main( void )
 {
     const char REBOOT_CMD[] = {'R', 's', 'T'};
+    const char CONFIG_CMD[] = {'C', 'f', 'G'};
     uint8_t reboot_idx = 0;
-    
+    uint8_t config_idx = 0;
+
+    cfg_t cfg;
+
     // output pin
     DDRD |= (1 << PD4);     // send power on (PD4)
     PIN_POWER_DISABLE       // switch off
@@ -243,7 +274,31 @@ int main( void )
     // Initialize IR lib
     ir_init();
 
-    uart_putstring("START\n");
+    // Read config from eeprom
+    {
+        uint8_t hash = 0xAA;
+        eeprom_read_block(cfg.data, (void*)10, sizeof(cfg));
+        for (config_idx=0; config_idx < sizeof(cfg); ++config_idx)
+        {
+            hash ^= cfg.data[config_idx];
+        }
+
+        if (0 != hash)
+        {
+            // use default values
+            cfg.s.address_l = IR_ADDRES_L;
+            cfg.s.address_h = IR_ADDRES_H;
+            cfg.s.power_key = IR_POWER_KEY;
+            cfg.s.flags = 0;
+#if defined(IR_RECEIVE_ALL) && IR_RECEIVE_ALL
+            cfg.s.flags |= CFG_FLAGS_RECV_ALL;
+#endif
+            cfg.s.hash = 0;
+        }
+    }
+
+    uart_putstring("StArT\n");
+    uart_putdata(cfg.data, sizeof(cfg));
 
 //#ifndef IR_POWER_SWITCH
 //    /*For example, Zgemma H9S need receive at least one key code from remote 
@@ -252,15 +307,6 @@ int main( void )
 //     */
 //    handle_power_key(1);
 //#endif
-
-    // Internal oscillator calibration
-#if 0
-    while(1)
-    {
-        uart_putstring("UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU ");
-        put_key('O', OSCCAL);
-    }
-#endif
 
     while(1)
     {
@@ -280,9 +326,36 @@ int main( void )
                 }
             }
             else
-            {
                 reboot_idx = 0;
+
+            if (val == CONFIG_CMD[config_idx])
+            {
+                config_idx += 1;
+                if (config_idx == sizeof(CONFIG_CMD))
+                {
+                    uint8_t hash = 0xAA;
+                    uart_putstring("CfS\n");
+                    for (config_idx=0; config_idx < sizeof(cfg); ++config_idx)
+                    {
+                        loop_until_bit_is_set(UCSRA, RXC);
+                        cfg.data[config_idx] = UDR;
+                        hash ^= cfg.data[config_idx];
+                    }
+
+                    if (hash == 0)
+                    {
+                        eeprom_write_block(cfg.data, (void*)10, sizeof(cfg));
+                        uart_putstring("CfO\n");
+                    }
+                    else
+                    {
+                        uart_putstring("CfK\n");
+                        put_key('E', hash);
+                    }
+                }
             }
+            else
+                config_idx = 0;
         }
 
         // Check if new code is received
@@ -291,14 +364,13 @@ int main( void )
             // Reset state
             ir.status &= ~(1<<IR_RECEIVED);
 
-#if !defined(IR_RECEIVE_ALL) || IR_RECEIVE_ALL == 0
-            if (ir.address_h != IR_ADDRES_H || ir.address_l != IR_ADDRES_L)
+            if (0 == (cfg.s.flags & CFG_FLAGS_RECV_ALL) && 
+                (ir.address_h != cfg.s.address_h || ir.address_l != cfg.s.address_l))
             {
                 continue;
             }
-#endif
 
-            if (last_key != ir.command || !last_key_valid)
+            if (last_key != ir.command || !last_key_valid || (cfg.s.flags & CFG_FLAGS_HAS_REPEAT))
             {
                 if (last_key_valid)
                 {
@@ -306,13 +378,15 @@ int main( void )
                 }
 
                 last_key = ir.command;
-#if defined(IR_RECEIVE_ALL) && IR_RECEIVE_ALL
-                put_key('L', ir.address_l);
-                put_key('H', ir.address_h);
-#endif
+                if (cfg.s.flags & CFG_FLAGS_RECV_ALL)
+                {
+                    put_key('L', ir.address_l);
+                    put_key('H', ir.address_h);
+                }
+
                 last_key_valid = 1;
                 put_key('P', last_key);
-                if (IR_POWER_KEY == last_key)
+                if (cfg.s.power_key == last_key)
                 {
                     handle_power_key(0);
                 }

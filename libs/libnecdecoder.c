@@ -210,6 +210,11 @@ ISR( INT0_vect )
             else if ((cnt_state>TIME_HOLD_MIN)&&(cnt_state<TIME_HOLD_MAX))
             {
                 ir_state = IR_BURST;
+                rc_timeout = 0;
+                TCNT0 = 0; // Reset counter
+                TCNT1 = 1; // Reset counter
+                OCR1A = 3124; // 20 Hz (8000000/((6249+1)*64))
+                TCCR1B = (1 << WGM12) | (1 << CS12);
                 break;
             }
         }
@@ -246,6 +251,10 @@ ISR( INT0_vect )
                     ir_state = IR_BURST; // Decoding finished.
                     rc_timeout = 0;
                     TCNT1 = 1; // Reset counter
+
+                    // short time
+                    OCR1A = 6249; // 20 Hz (8000000/((6249+1)*64))
+                    TCCR1B = (1 << CS11) | (1 << CS10) | (1 << WGM12);
 
                     // Only apply if received flag is not set, must be done
                     // by the main program after reading address and command
