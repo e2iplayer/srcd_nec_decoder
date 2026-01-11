@@ -42,6 +42,8 @@
 
 // disable WDT according to: https://www.nongnu.org/avr-libc/user-manual/group__avr__watchdog.html
 uint8_t mcusr_mirror __attribute__ ((section (".noinit")));
+uint8_t cold_boot_flag __attribute__ ((section (".noinit")));
+uint8_t cold_boot_inv __attribute__ ((section (".noinit")));
 void get_mcusr(void) __attribute__((naked)) __attribute__((section(".init3")));
 void get_mcusr(void)
 {
@@ -214,6 +216,9 @@ static void handle_power_key(uint8_t deepStandby)
 #endif
 #endif
     }
+
+    cold_boot_flag = 0;
+    cold_boot_inv = 0;
 }
 
 typedef struct {
@@ -300,6 +305,12 @@ int main( void )
     uart_putstring("StArT\n");
     uart_putdata(cfg.data, sizeof(cfg));
 
+    if (mcusr_mirror & ((1 << PORF) | (1 << BORF))) 
+    {
+        cold_boot_flag = 0x42;
+        cold_boot_inv = ~0x42;
+    }
+
 //#ifndef IR_POWER_SWITCH
 //    /*For example, Zgemma H9S need receive at least one key code from remote 
 //     * to be able to wake up later using this remote, so we send key at start 
@@ -319,6 +330,15 @@ int main( void )
                 reboot_idx += 1;
                 if (reboot_idx == sizeof(REBOOT_CMD))
                 {
+
+                    if (cold_boot_flag == 0x42 && cold_boot_inv == (uint8_t)~0x42) 
+                    {
+                        cold_boot_flag = 0;
+                        cold_boot_inv = 0;
+                        uart_putstring("CoLd\n");
+                        _delay_ms(5);
+                    }
+
                     // reset
                     wdt_enable(WDTO_15MS);
                     wdt_reset();
