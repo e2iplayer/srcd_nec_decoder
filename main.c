@@ -60,10 +60,19 @@ void get_mcusr(void)
 #include <util/setbaud.h>
 
 #if defined(IR_ORIGINAL_POWER_KEY) && defined(IR_ORIGINAL_ADDRES_L) && defined(IR_ORIGINAL_ADDRES_H)
+
+#ifdef IR_DEEP_WAKEUP_MODE_REMOTE_BASED_ON_TRANSISTOR
+
+#define PIN_POWER_ENABLE PORTD |= (1 << PD4);
+#define PIN_POWER_DISABLE PORTD &= ~(1 << PD4);
+#else
 #define PIN_POWER_ENABLE PORTD &= ~(1 << PD4);
 #define PIN_POWER_DISABLE PORTD |= (1 << PD4);
+#endif
+
 #define PIN_POWER_PULSE_DURATION_US 563
 static uint8_t power_raw_code[4] = {IR_ORIGINAL_ADDRES_L, IR_ORIGINAL_ADDRES_H, IR_ORIGINAL_POWER_KEY, ~IR_ORIGINAL_POWER_KEY};
+
 #else
 #define IR_POWER_SWITCH
 #define PIN_POWER_ENABLE PORTD |= (1 << PD4);
@@ -167,7 +176,7 @@ static void handle_power_key(uint8_t deepStandby)
 #ifdef IR_POWER_SWITCH
         cli();
         PIN_POWER_ENABLE
-        _delay_ms(100);
+        _delay_ms(200);
         PIN_POWER_DISABLE
         sei();
 #else
@@ -272,7 +281,13 @@ int main( void )
     //UCSR0B = _BV(TXEN0);  /* Enable TX */
     UCSRB = _BV(RXEN) | _BV(TXEN);   /* Enable RX and TX */
     // uart_init end
-    
+/*
+    while(1) {
+        
+        uart_putstring("CoLd\n");
+    }
+*/
+
     last_key = 0;
     last_key_valid = 0;
 
