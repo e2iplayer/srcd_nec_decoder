@@ -41,7 +41,7 @@ IR_RECEIVE_ALL ?= 0
 FORMAT = ihex
 TARGET = main
 
-SRC = libs/libnecdecoder.c $(TARGET).c
+SRC =  $(TARGET).c
 
 
 ASRC = 
